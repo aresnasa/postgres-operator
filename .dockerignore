@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+
+# Build artifacts
+bin/postgres-operator*
+!bin/.gitignore
+
+# Test files
+testing/
+*_test.go
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+
+# Log files
+*.log
+
+# Cache directories
+.cache/
+hack/tools/envtest/
+hack/tools/external-snapshotter/
+hack/.kube/
+
+# Generated files
+licenses/*/
+
+# Docker files (except our custom ones)
+Dockerfile
+!Dockerfile.builder

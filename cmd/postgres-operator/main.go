@@ -91,7 +91,7 @@ func initManager(ctx context.Context) (runtime.Options, error) {
 	options.Metrics.FilterProvider = filters.WithAuthenticationAndAuthorization
 
 	// Set health probe port
-	options.HealthProbeBindAddress = ":8081"
+	options.HealthProbeBindAddress = ":8091"
 
 	// Enable leader elections when configured with a valid Lease.coordination.k8s.io name.
 	// - https://docs.k8s.io/concepts/architecture/leases

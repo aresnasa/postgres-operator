@@ -155,7 +155,13 @@ deploy-dev: createnamespaces
 ##@ Build - Binary
 .PHONY: build-postgres-operator
 build-postgres-operator: ## Build the postgres-operator binary
-	$(GO_BUILD) $(\
+	MACOSX_DEPLOYMENT_TARGET=15.4 CGO_ENABLED=1 CGO_CFLAGS="-Wno-error=unused-function -D_GNU_SOURCE" $(GO_BUILD) $(\
+		) --ldflags '-X "main.versionString=$(PGO_VERSION)"' $(\
+		) --trimpath -o bin/postgres-operator ./cmd/postgres-operator
+
+.PHONY: build-postgres-operator-nocgo
+build-postgres-operator-nocgo: ## Build the postgres-operator binary without CGO
+	CGO_ENABLED=0 $(GO_BUILD) $(\
 		) --ldflags '-X "main.versionString=$(PGO_VERSION)"' $(\
 		) --trimpath -o bin/postgres-operator ./cmd/postgres-operator
 
