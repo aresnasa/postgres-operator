@@ -24,14 +24,25 @@ ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOARCH=amd64
 
+# 创建输出目录
+RUN mkdir -p /app/bin
+
 # 运行 setup 和构建
-RUN make setup && \
-    make build-postgres-operator-nocgo
+RUN echo "=== 开始构建 PostgreSQL Operator ===" && \
+    make setup && \
+    make build-postgres-operator-nocgo && \
+    echo "=== 构建完成 ===" && \
+    ls -la bin/
 
 # 验证构建结果
-RUN ls -la bin/ && \
-    file bin/postgres-operator && \
-    ./bin/postgres-operator --version || echo "Binary created successfully"
+RUN if [ -f "bin/postgres-operator" ]; then \
+        echo "✅ 构建成功" && \
+        file bin/postgres-operator && \
+        ./bin/postgres-operator --version || echo "Binary created successfully"; \
+    else \
+        echo "❌ 构建失败：未找到二进制文件" && \
+        exit 1; \
+    fi
 
 # 运行时镜像
 FROM registry.access.redhat.com/ubi8/ubi-minimal AS runtime

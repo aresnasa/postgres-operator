@@ -6,7 +6,7 @@
 
 ### 前置要求
 
-- Docker 20.10+ 
+- Docker 20.10+
 - docker-compose 1.29+
 - Linux 操作系统（支持 x86_64 架构）
 

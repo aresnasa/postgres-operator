@@ -33,23 +33,23 @@ log_error() {
 # 检查 Docker 和 docker-compose
 check_requirements() {
     log_info "检查系统要求..."
-    
+
     if ! command -v docker &> /dev/null; then
         log_error "Docker 未安装。请先安装 Docker。"
         exit 1
     fi
-    
+
     if ! command -v docker-compose &> /dev/null; then
         log_error "docker-compose 未安装。请先安装 docker-compose。"
         exit 1
     fi
-    
+
     # 检查 Docker 是否运行
     if ! docker info &> /dev/null; then
         log_error "Docker 服务未运行。请启动 Docker 服务。"
         exit 1
     fi
-    
+
     log_success "系统要求检查通过"
 }
 
@@ -63,26 +63,45 @@ cleanup() {
 # 构建函数
 build_operator() {
     log_info "开始构建 PostgreSQL Operator..."
-    
-    # 构建镜像
+
+    # 确保 bin 目录存在
+    mkdir -p bin
+
+    # 构建镜像（构建过程在 Dockerfile 中完成）
+    log_info "构建 PostgreSQL Operator 镜像..."
     docker-compose build --no-cache postgres-operator-builder
-    
-    # 运行构建
+
+    # 运行构建容器以复制二进制文件
+    log_info "复制构建结果..."
     docker-compose run --rm postgres-operator-builder
-    
+
     # 检查构建结果
     if [ -f "bin/postgres-operator" ]; then
         log_success "二进制文件构建成功"
         ls -la bin/postgres-operator
+        log_info "文件大小: $(du -h bin/postgres-operator | cut -f1)"
     else
         log_error "构建失败：未找到二进制文件"
-        exit 1
+        log_info "尝试从 Docker 镜像中提取二进制文件..."
+
+        # 尝试从镜像中复制文件
+        docker create --name temp-container postgres-operator:builder
+        docker cp temp-container:/app/bin/postgres-operator ./bin/ 2>/dev/null || true
+        docker rm temp-container 2>/dev/null || true
+
+        if [ -f "bin/postgres-operator" ]; then
+            log_success "成功从镜像中提取二进制文件"
+            ls -la bin/postgres-operator
+        else
+            log_error "无法获取构建的二进制文件"
+            exit 1
+        fi
     fi
-    
+
     # 构建运行时镜像
     log_info "构建运行时镜像..."
     docker-compose build postgres-operator
-    
+
     log_success "PostgreSQL Operator 构建完成"
 }
 
@@ -90,10 +109,10 @@ build_operator() {
 run_operator() {
     log_info "启动 PostgreSQL Operator..."
     docker-compose up -d postgres-operator
-    
+
     log_info "等待服务启动..."
     sleep 10
-    
+
     # 检查服务状态
     if docker-compose ps postgres-operator | grep -q "Up"; then
         log_success "PostgreSQL Operator 启动成功"
