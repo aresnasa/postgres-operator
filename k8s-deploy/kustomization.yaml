@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: postgres-operator
+
+labels:
+- includeSelectors: true
+  pairs:
+    postgres-operator.crunchydata.com/control-plane: postgres-operator
+
+resources:
+- ../config/manager
+
+images:
+- name: postgres-operator
+  newName: localhost/postgres-operator
+  newTag: latest
+
+patches:
+- target:
+    kind: Deployment
+    name: postgres-operator
+  patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: PGO_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: CRUNCHY_DEBUG
+        value: "true"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: PGO_FEATURE_GATES
+        value: "AllAlpha=true"
+

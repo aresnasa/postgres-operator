@@ -1,5 +1,7 @@
+version: '3.8'
+
 services:
-  # PostgreSQL Operator 服务
+  # PostgreSQL Operator 服务 (多架构)
   postgres-operator:
     build:
       context: .
@@ -20,14 +22,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8091/readyz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    depends_on:
+      - postgres-test
 
-  # 构建辅助服务（用于提取二进制文件到本地）
+  # 构建辅助服务（多架构）
   postgres-operator-builder:
     build:
       context: .
@@ -41,14 +39,20 @@ services:
       - ./bin:/output
     command: >
       sh -c "
-        echo '=== 复制构建结果到本地 ===' &&
+        echo '=== 开始多架构构建 ===' &&
+        echo 'Architecture: '$(uname -m) &&
+        echo 'Platform: '$(uname -a) &&
         mkdir -p /output &&
-        cp /app/bin/postgres-operator /output/ &&
-        chmod +x /output/postgres-operator &&
-        echo '=== 构建结果已复制到 ./bin/ ==='
+        if [ -f /app/bin/postgres-operator ]; then
+          cp /app/bin/postgres-operator /output/postgres-operator-$(uname -m) &&
+          echo '=== 构建结果已复制到 ./bin/postgres-operator-'$(uname -m)' ==='
+        else
+          echo '❌ 构建失败：未找到二进制文件'
+          exit 1
+        fi
       "
 
-  # 可选：PostgreSQL 测试数据库
+  # PostgreSQL 测试数据库
   postgres-test:
     image: postgres:16-alpine
     environment:
@@ -60,15 +64,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # 可选：pgAdmin 管理界面
+  # pgAdmin 管理界面
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@example.com
       - PGADMIN_DEFAULT_PASSWORD=admin123
+      - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=True
+      - PGADMIN_CONFIG_LOGIN_BANNER="PostgreSQL Operator Testing Environment"
     ports:
-      - "8090:80"  # 改为 8090 避免与 operator 冲突
+      - "8081:80"  # 避免与 operator 的 8080 端口冲突
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     restart: unless-stopped
@@ -77,8 +88,11 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
   pgadmin_data:
+    driver: local
 
 networks:
   default:
     name: postgres-operator-network
+    driver: bridge

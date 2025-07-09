@@ -1,0 +1,180 @@
+apiVersion: postgres-operator.crunchydata.com/v1beta1
+kind: PostgresCluster
+metadata:
+  name: postgres-sample
+  namespace: postgres-operator
+spec:
+  postgresVersion: 16
+
+  # PostgreSQL 实例配置
+  instances:
+    - name: instance1
+      replicas: 1
+      dataVolumeClaimSpec:
+        accessModes:
+        - "ReadWriteOnce"
+        storageClassName: "" # 使用默认存储类
+        resources:
+          requests:
+            storage: 2Gi
+
+      # 资源限制
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1000m"
+          memory: "1Gi"
+
+      # 亲和性配置 (可选)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  postgres-operator.crunchydata.com/cluster: postgres-sample
+                  postgres-operator.crunchydata.com/instance-set: instance1
+
+  # 备份配置
+  backups:
+    pgbackrest:
+      # 全局配置
+      global:
+        repo1-retention-full: "14"
+        repo1-retention-diff: "7"
+        repo1-retention-incr: "2"
+
+      # 备份仓库配置
+      repos:
+      - name: repo1
+        schedules:
+          full: "0 2 * * 0"      # 每周日凌晨2点全量备份
+          differential: "0 2 * * 1-6"  # 周一到周六差异备份
+        volume:
+          volumeClaimSpec:
+            accessModes:
+            - "ReadWriteOnce"
+            resources:
+              requests:
+                storage: 2Gi
+
+  # 连接池配置
+  proxy:
+    pgBouncer:
+      replicas: 1
+
+      # PgBouncer 资源配置
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "200m"
+          memory: "128Mi"
+
+      # 连接池配置
+      config:
+        global:
+          pool_mode: "transaction"
+          max_client_conn: "100"
+          default_pool_size: "10"
+
+  # 监控配置
+  monitoring:
+    pgmonitor:
+      exporter:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+
+  # PostgreSQL 配置
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          # 内存配置
+          shared_buffers: "128MB"
+          effective_cache_size: "384MB"
+          work_mem: "4MB"
+          maintenance_work_mem: "64MB"
+
+          # 连接配置
+          max_connections: "100"
+
+          # 日志配置
+          log_destination: "stderr"
+          logging_collector: "on"
+          log_directory: "log"
+          log_filename: "postgresql-%Y-%m-%d.log"
+          log_statement: "all"
+          log_min_duration_statement: "1000"
+
+          # 性能优化
+          checkpoint_completion_target: "0.9"
+          wal_buffers: "16MB"
+
+          # 时区
+          timezone: "UTC"
+
+  # 用户配置
+  users:
+  - name: app-user
+    databases:
+    - "app-db"
+    options: "CREATEDB"
+
+  # 数据库配置
+  databases:
+  - name: app-db
+    options: "LC_COLLATE=C.UTF-8 LC_CTYPE=C.UTF-8"
+
+---
+# 可选：配置服务暴露
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-sample-external
+  namespace: postgres-operator
+spec:
+  type: NodePort  # 或者使用 LoadBalancer
+  selector:
+    postgres-operator.crunchydata.com/cluster: postgres-sample
+    postgres-operator.crunchydata.com/role: master
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+    nodePort: 30432  # 在 30000-32767 范围内
+
+---
+# 可选：网络策略 (安全配置)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-sample-netpol
+  namespace: postgres-operator
+spec:
+  podSelector:
+    matchLabels:
+      postgres-operator.crunchydata.com/cluster: postgres-sample
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: postgres-operator
+    - namespaceSelector:
+        matchLabels:
+          name: default  # 允许 default 命名空间访问
+  egress:
+  - {}  # 允许所有出站流量

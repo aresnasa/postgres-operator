@@ -1,0 +1,337 @@
+apiVersion: postgres-operator.crunchydata.com/v1beta1
+kind: PostgresCluster
+metadata:
+  name: postgres-production
+  namespace: postgres-operator
+  labels:
+    environment: production
+    app: postgres-production
+spec:
+  postgresVersion: 16
+
+  # 高可用 PostgreSQL 实例配置
+  instances:
+    # 主实例组
+    - name: primary
+      replicas: 1  # 主节点只有一个
+      dataVolumeClaimSpec:
+        accessModes:
+        - "ReadWriteOnce"
+        storageClassName: "fast-ssd"  # 使用高性能存储
+        resources:
+          requests:
+            storage: 100Gi
+
+      # 生产环境资源配置
+      resources:
+        requests:
+          cpu: "2000m"
+          memory: "4Gi"
+        limits:
+          cpu: "4000m"
+          memory: "8Gi"
+
+      # 反亲和性确保不在同一节点
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                postgres-operator.crunchydata.com/cluster: postgres-production
+
+    # 只读副本实例组
+    - name: replica
+      replicas: 2  # 两个只读副本
+      dataVolumeClaimSpec:
+        accessModes:
+        - "ReadWriteOnce"
+        storageClassName: "fast-ssd"
+        resources:
+          requests:
+            storage: 100Gi
+
+      resources:
+        requests:
+          cpu: "1000m"
+          memory: "2Gi"
+        limits:
+          cpu: "2000m"
+          memory: "4Gi"
+
+      # 反亲和性
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                postgres-operator.crunchydata.com/cluster: postgres-production
+
+  # 生产级备份配置
+  backups:
+    pgbackrest:
+      # 全局备份配置
+      global:
+        repo1-retention-full: "30"      # 保留30个全量备份
+        repo1-retention-diff: "14"      # 保留14个差异备份
+        repo1-retention-incr: "7"       # 保留7个增量备份
+        repo2-retention-full: "90"      # 第二个仓库保留更久
+        repo2-retention-diff: "30"
+        repo2-retention-incr: "14"
+        compress-level: "9"             # 最高压缩
+        compress-type: "lz4"            # 快速压缩算法
+
+      # 多个备份仓库
+      repos:
+      # 本地快速备份仓库
+      - name: repo1
+        schedules:
+          full: "0 3 * * 0"             # 每周日凌晨3点全量备份
+          differential: "0 3 * * 1,3,5"  # 周一、三、五差异备份
+          incremental: "0 3 * * 2,4,6"   # 周二、四、六增量备份
+        volume:
+          volumeClaimSpec:
+            accessModes:
+            - "ReadWriteOnce"
+            storageClassName: "fast-ssd"
+            resources:
+              requests:
+                storage: 200Gi
+
+      # 远程长期备份仓库 (S3 兼容存储)
+      - name: repo2
+        schedules:
+          full: "0 4 * * 0"             # 每周日凌晨4点
+        s3:
+          bucket: "postgres-backups"
+          endpoint: "https://s3.example.com"
+          region: "us-east-1"
+        secretRef:
+          name: postgres-backup-s3-secret
+
+  # 高性能连接池配置
+  proxy:
+    pgBouncer:
+      replicas: 3  # 多个连接池实例
+
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "256Mi"
+        limits:
+          cpu: "1000m"
+          memory: "512Mi"
+
+      # 生产级连接池配置
+      config:
+        global:
+          pool_mode: "transaction"
+          max_client_conn: "1000"
+          default_pool_size: "50"
+          reserve_pool_size: "10"
+          reserve_pool_timeout: "5"
+          max_db_connections: "100"
+          max_user_connections: "100"
+          server_round_robin: "1"
+          ignore_startup_parameters: "extra_float_digits"
+
+      # 反亲和性
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  postgres-operator.crunchydata.com/cluster: postgres-production
+                  postgres-operator.crunchydata.com/role: pgbouncer
+
+  # 监控配置
+  monitoring:
+    pgmonitor:
+      exporter:
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+        # 自定义监控查询
+        customTLSSecret:
+          name: postgres-monitoring-tls
+
+  # 生产级 PostgreSQL 配置
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          # 内存配置 (针对8GB内存)
+          shared_buffers: "2GB"
+          effective_cache_size: "6GB"
+          work_mem: "16MB"
+          maintenance_work_mem: "512MB"
+          huge_pages: "try"
+
+          # 连接配置
+          max_connections: "500"
+          superuser_reserved_connections: "10"
+
+          # WAL 配置
+          wal_level: "replica"
+          max_wal_size: "4GB"
+          min_wal_size: "1GB"
+          wal_buffers: "64MB"
+          wal_compression: "on"
+
+          # 检查点配置
+          checkpoint_completion_target: "0.9"
+          checkpoint_timeout: "15min"
+
+          # 查询优化
+          random_page_cost: "1.1"  # SSD 优化
+          effective_io_concurrency: "200"
+
+          # 日志配置
+          log_destination: "stderr"
+          logging_collector: "on"
+          log_directory: "log"
+          log_filename: "postgresql-%Y-%m-%d_%H%M%S.log"
+          log_rotation_age: "1d"
+          log_rotation_size: "100MB"
+          log_min_duration_statement: "500"
+          log_statement: "ddl"
+          log_lock_waits: "on"
+          log_temp_files: "1024"
+
+          # 统计配置
+          track_activities: "on"
+          track_counts: "on"
+          track_io_timing: "on"
+          track_functions: "all"
+
+          # 自动清理配置
+          autovacuum: "on"
+          autovacuum_max_workers: "4"
+          autovacuum_naptime: "30s"
+
+          # 复制配置
+          hot_standby: "on"
+          hot_standby_feedback: "on"
+          max_standby_streaming_delay: "30s"
+
+          # 安全配置
+          ssl: "on"
+          ssl_ciphers: "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+          ssl_prefer_server_ciphers: "on"
+
+          # 时区
+          timezone: "UTC"
+          log_timezone: "UTC"
+
+  # 用户和数据库配置
+  users:
+  - name: app-user
+    databases:
+    - "app-production"
+    options: "CREATEDB CREATEROLE"
+
+  - name: readonly-user
+    databases:
+    - "app-production"
+    options: "NOSUPERUSER NOCREATEDB NOCREATEROLE"
+
+  databases:
+  - name: app-production
+    options: "LC_COLLATE=en_US.UTF-8 LC_CTYPE=en_US.UTF-8"
+
+  # 自定义 TLS 配置
+  customTLSSecret:
+    name: postgres-production-tls
+
+---
+# 生产环境服务配置
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-production-primary
+  namespace: postgres-operator
+  labels:
+    app: postgres-production
+    role: primary
+spec:
+  type: ClusterIP
+  selector:
+    postgres-operator.crunchydata.com/cluster: postgres-production
+    postgres-operator.crunchydata.com/role: master
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-production-replica
+  namespace: postgres-operator
+  labels:
+    app: postgres-production
+    role: replica
+spec:
+  type: ClusterIP
+  selector:
+    postgres-operator.crunchydata.com/cluster: postgres-production
+    postgres-operator.crunchydata.com/role: replica
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+
+---
+# PodDisruptionBudget 确保高可用
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-production-pdb
+  namespace: postgres-operator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      postgres-operator.crunchydata.com/cluster: postgres-production
+
+---
+# 网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-production-netpol
+  namespace: postgres-operator
+spec:
+  podSelector:
+    matchLabels:
+      postgres-operator.crunchydata.com/cluster: postgres-production
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: app-namespace  # 只允许应用命名空间访问
+    ports:
+    - protocol: TCP
+      port: 5432
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring  # 允许监控命名空间访问
+    ports:
+    - protocol: TCP
+      port: 9187  # PostgreSQL exporter
+  egress:
+  - {}  # 允许所有出站流量
